@@ -2,7 +2,7 @@ package com.github.jasync.sql.db
 
 import org.assertj.core.api.Assertions
 
-fun verifyExceptionInHierarchy(
+inline fun verifyExceptionInHierarchy(
     exceptionType: Class<out java.lang.Exception>,
     body: () -> Unit
 ) {
@@ -22,7 +22,7 @@ fun verifyExceptionInHierarchy(
     }
 }
 
-fun verifyException(
+inline fun verifyException(
     exceptionType: Class<out java.lang.Exception>,
     causeType: Class<out java.lang.Exception>? = null,
     body: () -> Unit

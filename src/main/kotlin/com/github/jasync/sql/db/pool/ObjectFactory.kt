@@ -2,6 +2,7 @@ package com.github.jasync.sql.db.pool
 
 import com.github.jasync.sql.db.util.Try
 import com.github.jasync.sql.db.util.asCompletedFuture
+import kotlinx.coroutines.CompletableDeferred
 import java.util.concurrent.CompletableFuture
 
 /**
@@ -21,8 +22,7 @@ interface ObjectFactory<T> {
      *
      * @return a future with created object
      */
-
-    fun create(): CompletableFuture<out T>
+    suspend fun create(): T
 
     /**
      *
@@ -32,8 +32,7 @@ interface ObjectFactory<T> {
      *
      * @param item
      */
-
-    fun destroy(item: T)
+    suspend fun destroy(item: T)
 
     /**
      *
@@ -48,8 +47,7 @@ interface ObjectFactory<T> {
      * @return If this object is not valid anymore, a Failure should be returned, otherwise Success
      *         should be the result of this call.
      */
-
-    fun validate(item: T): Try<T>
+    suspend fun validate(item: T): Try<T>
 
     /**
      *
@@ -60,6 +58,5 @@ interface ObjectFactory<T> {
      * @param item an object produced by this pool
      * @return a future with the object or a failed future in case test failed
      */
-
-    fun test(item: T): CompletableFuture<T> = validate(item).asCompletedFuture()
+    suspend fun test(item: T): T = validate(item).get()
 }

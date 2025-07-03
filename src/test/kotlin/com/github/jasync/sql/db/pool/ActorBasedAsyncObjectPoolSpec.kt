@@ -1,5 +1,6 @@
 package com.github.jasync.sql.db.pool
 
+import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.Test
 
@@ -11,7 +12,10 @@ class ActorBasedAsyncObjectPoolSpec : AbstractAsyncObjectPoolSpec<ActorBasedObje
     @Test
     fun `SingleThreadedAsyncObjectPool should successfully record a closed state`() {
         val p = createPool()
-        assertThat(p.close().get()).isEqualTo(p)
-        assertThat(p.closed).isTrue()
+        assertThat(p.closed).isFalse()
+        runBlocking {
+            p.close()
+            assertThat(p.closed).isTrue()
+        }
     }
 }

@@ -1,9 +1,11 @@
 package com.github.jasync.sql.db.pool
 
-import com.github.jasync.sql.db.util.FP
 import com.github.jasync.sql.db.util.Try
 import com.github.jasync.sql.db.util.isSuccess
 import com.github.jasync.sql.db.verifyException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.matches
@@ -12,6 +14,8 @@ import org.junit.After
 import org.junit.Test
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
+import kotlin.coroutines.suspendCoroutine
+import kotlin.test.assertFalse
 
 class ActorBasedObjectPoolTest {
 
@@ -32,199 +36,199 @@ class ActorBasedObjectPoolTest {
     )
 
     @After
-    fun closePool() {
+    fun closePool(): Unit = runBlocking {
         if (::tested.isInitialized) {
-            tested.close().get()
+            tested.close()
         }
     }
 
     @Test
-    fun `check no take operations can be done after pool is close and connection is cleanup`() {
+    fun `check no take operations can be done after pool is close and connection is cleanup`(): Unit = runBlocking {
         tested = createDefaultPool()
-        val widget = tested.take().get()
-        tested.close().get()
+        val widget = tested.take()
+        tested.close()
         verifyException(PoolAlreadyTerminatedException::class.java) {
-            tested.take().get()
+            tested.take()
         }
         assertThat(factory.destroyed).isEqualTo(listOf(widget))
     }
 
     @Test
-    fun `basic take operation`() {
+    fun `basic take operation`(): Unit = runBlocking {
         tested = createDefaultPool()
-        val result = tested.take().get()
+        val result = tested.take()
         assertThat(result).isEqualTo(factory.created[0])
         assertThat(result).isEqualTo(factory.validated[0])
     }
 
     @Test
-    fun `basic take operation - when create is stuck should be timeout`() {
+    fun `basic take operation - when create is stuck should be timeout`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(createTimeout = 10),
             false
         )
         factory.creationStuck = true
-        val result = tested.take()
-        Thread.sleep(20)
+        val result = async { tested.take() }
+        delay(20)
         tested.testAvailableItems()
-        await.untilCallTo { result.isCompletedExceptionally } matches { it == true }
+        await.untilCallTo { result.getCompletionExceptionOrNull() != null } matches { it == true }
     }
 
     @Test
-    fun `take operation that is waiting in queue - when create is stuck should be timeout`() {
+    fun `take operation that is waiting in queue - when create is stuck should be timeout`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(maxObjects = 1, queryTimeout = 10),
             false
         )
         // first item is canceled when the create fails
-        tested.take()
-        val takeSecondItem = tested.take()
+        async { tested.take() }
+        val takeSecondItem = async { tested.take() }
         factory.creationStuck = true
-        Thread.sleep(20)
+        delay(20)
         // third item is not timeout immediately
-        val takeThirdItem = tested.take()
+        val takeThirdItem = async { tested.take() }
         tested.testAvailableItems()
-        assertThat(takeThirdItem.isCompletedExceptionally).isFalse
-        await.untilCallTo { takeSecondItem.isCompletedExceptionally } matches { it == true }
-        Thread.sleep(20)
+        assertFalse(takeThirdItem.isCompleted)
+        await.untilCallTo { takeSecondItem.getCompletionExceptionOrNull() != null } matches { it == true }
+        delay(20)
         tested.testAvailableItems()
-        await.untilCallTo { takeThirdItem.isCompletedExceptionally } matches { it == true }
+        await.untilCallTo { takeThirdItem.getCompletionExceptionOrNull() != null } matches { it == true }
     }
 
     @Test
-    fun `basic take operation - when create is little stuck should not be timeout (create timeout is 5 sec)`() {
+    fun `basic take operation - when create is little stuck should not be timeout (create timeout is 5 sec)`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(createTimeout = 5000),
             false
         )
         factory.creationStuckTime = 10
-        val result = tested.take()
-        Thread.sleep(20)
+        val result = async { tested.take() }
+        delay(20)
         tested.testAvailableItems()
-        await.untilCallTo { result.isSuccess } matches { it == true }
+        await.untilCallTo { result.isCompleted } matches { it == true }
     }
 
     @Test
-    fun `check items periodically`() {
+    fun `check items periodically`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(validationInterval = 1000),
             testItemsPeriodically = true
         )
-        val result = tested.take().get()
+        val result = tested.take()
         tested.giveBack(result)
-        Thread.sleep(1000)
+        delay(1000)
         await.untilCallTo { factory.tested } matches { it?.containsKey(result) == true }
     }
 
     @Test(expected = Exception::class)
-    fun `basic take operation when create failed future should fail`() {
+    fun `basic take operation when create failed future should fail`(): Unit = runBlocking {
         tested = createDefaultPool()
         factory.failCreation = true
-        tested.take().get()
+        tested.take()
     }
 
     @Test(expected = Exception::class)
-    fun `basic take operation when create failed future should fail 2`() {
+    fun `basic take operation when create failed future should fail 2`(): Unit = runBlocking {
         tested = createDefaultPool()
         factory.failCreationFuture = true
-        tested.take().get()
+        tested.take()
     }
 
     @Test(expected = Exception::class)
-    fun `basic take operation when validation failed future should fail`() {
+    fun `basic take operation when validation failed future should fail`(): Unit = runBlocking {
         tested = createDefaultPool()
         factory.failValidation = true
-        tested.take().get()
+        tested.take()
     }
 
     @Test(expected = Exception::class)
-    fun `basic take operation when validation failed future should fail 2`() {
+    fun `basic take operation when validation failed future should fail 2`(): Unit = runBlocking {
         tested = createDefaultPool()
         factory.failValidationTry = true
-        tested.take().get()
+        tested.take()
     }
 
     @Test
-    fun `basic take-return-take operation`() {
+    fun `basic take-return-take operation`(): Unit = runBlocking {
         tested = createDefaultPool()
-        val result = tested.take().get()
-        tested.giveBack(result).get()
-        val result2 = tested.take().get()
+        val result = tested.take()
+        tested.giveBack(result)
+        val result2 = tested.take()
         assertThat(result).isEqualTo(result2)
         assertThat(factory.validated).isEqualTo(listOf(result, result, result))
     }
 
     @Test
-    fun `softEviction - basic take-evict-return pool should be empty`() {
+    fun `softEviction - basic take-evict-return pool should be empty`(): Unit = runBlocking {
         tested = createDefaultPool()
-        val result = tested.take().get()
-        tested.softEvict().get()
-        tested.giveBack(result).get()
+        val result = tested.take()
+        tested.softEvict()
+        tested.giveBack(result)
         assertThat(tested.availableItems).isEmpty()
     }
 
     @Test
-    fun `softEviction - minimum number of objects is maintained, but objects are replaced`() {
+    fun `softEviction - minimum number of objects is maintained, but objects are replaced`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(minIdleObjects = 3),
             false
         )
-        tested.take().get()
+        tested.take()
         await.untilCallTo { tested.availableItemsSize } matches { it == 3 }
         val availableItems = tested.availableItems
-        tested.softEvict().get()
+        tested.softEvict()
         await.untilCallTo { tested.availableItemsSize } matches { it == 3 }
         assertThat(tested.availableItems.toSet().intersect(availableItems.toSet())).isEmpty()
     }
 
     @Test
-    fun `test for objects in create eviction in case of softEviction`() {
+    fun `test for objects in create eviction in case of softEviction`(): Unit = runBlocking {
         factory.creationStuckTime = 10
         tested = createDefaultPool()
-        val itemPromise = tested.take()
-        tested.softEvict().get()
-        val item = itemPromise.get()
-        tested.giveBack(item).get()
+        val itemPromise = async { tested.take() }
+        tested.softEvict()
+        val item = itemPromise.await()
+        tested.giveBack(item)
         assertThat(tested.availableItemsSize).isEqualTo(0)
     }
 
     @Test
-    fun `take2-return2-take first not validated second is ok should be returned`() {
+    fun `take2-return2-take first not validated second is ok should be returned`(): Unit = runBlocking {
         tested = createDefaultPool()
-        val result = tested.take().get()
-        val result2 = tested.take().get()
-        tested.giveBack(result).get()
-        tested.giveBack(result2).get()
+        val result = tested.take()
+        val result2 = tested.take()
+        tested.giveBack(result)
+        tested.giveBack(result2)
         result.isOk = false
-        val result3 = tested.take().get()
+        val result3 = tested.take()
         assertThat(result3).isEqualTo(result2)
         assertThat(factory.destroyed).isEqualTo(listOf(result))
     }
 
     @Test
-    fun `basic pool size 1 take2 one should not be completed until 1 returned`() {
+    fun `basic pool size 1 take2 one should not be completed until 1 returned`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(maxObjects = 1),
             false
         )
-        val result = tested.take().get()
-        val result2Future = tested.take()
-        assertThat(result2Future).isNotCompleted
-        tested.giveBack(result).get()
-        result2Future.get()
+        val result = tested.take()
+        val result2Future = async { tested.take() }
+        assertFalse(result2Future.isCompleted)
+        tested.giveBack(result)
+        result2Future.await()
     }
 
     @Test
-    fun `basic pool item validation should return to pool after test`() {
+    fun `basic pool item validation should return to pool after test`(): Unit = runBlocking {
         tested = createDefaultPool()
-        val widget = tested.take().get()
-        tested.giveBack(widget).get()
+        val widget = tested.take()
+        tested.giveBack(widget)
         await.untilCallTo { tested.availableItems } matches { it == listOf(widget) }
         tested.testAvailableItems()
         await.untilCallTo { factory.tested.size } matches { it == 1 }
@@ -234,10 +238,10 @@ class ActorBasedObjectPoolTest {
     }
 
     @Test
-    fun `basic pool item validation should not return to pool after failed test`() {
+    fun `basic pool item validation should not return to pool after failed test`(): Unit = runBlocking {
         tested = createDefaultPool()
-        val widget = tested.take().get()
-        tested.giveBack(widget).get()
+        val widget = tested.take()
+        tested.giveBack(widget)
         await.untilCallTo { tested.availableItems } matches { it == listOf(widget) }
         tested.testAvailableItems()
         await.untilCallTo { factory.tested.size } matches { it == 1 }
@@ -249,64 +253,64 @@ class ActorBasedObjectPoolTest {
     }
 
     @Test
-    fun `on test items pool should reclaim idle items`() {
+    fun `on test items pool should reclaim idle items`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(maxIdle = 10),
             false
         )
-        val widget = tested.take().get()
-        tested.giveBack(widget).get()
-        Thread.sleep(20)
+        val widget = tested.take()
+        tested.giveBack(widget)
+        delay(20)
         tested.testAvailableItems()
         await.untilCallTo { factory.destroyed } matches { it == listOf(widget) }
         assertThat(tested.availableItems).isEmpty()
     }
 
     @Test
-    fun `on take items pool should reclaim items pass ttl`() {
+    fun `on take items pool should reclaim items pass ttl`(): Unit = runBlocking {
         tested =
             ActorBasedObjectPool(
                 factory,
                 configuration.copy(maxObjectTtl = 50),
                 false
             )
-        val widget = tested.take().get()
-        Thread.sleep(70)
-        tested.giveBack(widget).get()
-        val widget2 = tested.take().get()
+        val widget = tested.take()
+        delay(70)
+        tested.giveBack(widget)
+        val widget2 = tested.take()
         assertThat(widget).isNotEqualTo(widget2)
         assertThat(factory.created.size).isEqualTo(2)
         assertThat(factory.destroyed[0]).isEqualTo(widget)
     }
 
     @Test
-    fun `on test items pool should reclaim aged-out items`() {
+    fun `on test items pool should reclaim aged-out items`(): Unit = runBlocking {
         tested =
             ActorBasedObjectPool(
                 factory,
                 configuration.copy(maxObjectTtl = 50),
                 false
             )
-        val widget = tested.take().get()
-        tested.giveBack(widget).get()
-        Thread.sleep(70)
+        val widget = tested.take()
+        tested.giveBack(widget)
+        delay(70)
         tested.testAvailableItems()
         await.untilCallTo { factory.destroyed } matches { it == listOf(widget) }
         assertThat(tested.availableItems).isEmpty()
     }
 
     @Test
-    fun `on test of item that last test timeout pool should destroy item`() {
+    fun `on test of item that last test timeout pool should destroy item`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(testTimeout = 10),
             false
         )
-        val widget = tested.take().get()
-        tested.giveBack(widget).get()
+        val widget = tested.take()
+        tested.giveBack(widget)
         tested.testAvailableItems()
-        Thread.sleep(20)
+        delay(20)
         tested.testAvailableItems()
         await.untilCallTo { factory.destroyed } matches { it == listOf(widget) }
         assertThat(tested.availableItems).isEmpty()
@@ -314,15 +318,15 @@ class ActorBasedObjectPoolTest {
     }
 
     @Test
-    fun `on query timeout pool should destroy item`() {
+    fun `on query timeout pool should destroy item`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(queryTimeout = 10),
             false,
             extraTimeForTimeoutCompletion = 1
         )
-        val widget = tested.take().get()
-        Thread.sleep(20)
+        val widget = tested.take()
+        delay(20)
         tested.testAvailableItems()
         await.untilCallTo { factory.destroyed } matches { it == listOf(widget) }
         assertThat(tested.availableItems).isEmpty()
@@ -330,78 +334,78 @@ class ActorBasedObjectPoolTest {
     }
 
     @Test
-    fun `when queue is bigger then max waiting, future should fail`() {
+    fun `when queue is bigger then max waiting, future should fail`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(maxObjects = 1, maxQueueSize = 1),
             false
         )
-        tested.take().get()
         tested.take()
+        async { tested.take() }
         verifyException(ExecutionException::class.java, PoolExhaustedException::class.java) {
-            tested.take().get()
+            tested.take()
         }
     }
 
     @Test
-    fun `test for leaks detection - we are taking a widget but lost it so it should be cleaned up`() {
+    fun `test for leaks detection - we are taking a widget but lost it so it should be cleaned up`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             ForTestingWeakMyFactory(),
             configuration.copy(maxObjects = 1, maxQueueSize = 1),
             false
         )
         // takeLostItem
-        tested.take().get()
-        Thread.sleep(1000)
+        tested.take()
+        delay(1000)
         System.gc()
         await.untilCallTo { tested.usedItemsSize } matches { it == 0 }
         await.untilCallTo { tested.waitingForItemSize } matches { it == 0 }
         await.untilCallTo { tested.availableItemsSize } matches { it == 0 }
         System.gc() // to show leak in logging
-        Thread.sleep(1000)
+        delay(1000)
     }
 
     @Test
-    fun `test minIdleObjects - we maintain a minimum number of objects`() {
+    fun `test minIdleObjects - we maintain a minimum number of objects`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(minIdleObjects = 3),
             false
         )
-        tested.take().get()
-        Thread.sleep(20)
+        tested.take()
+        delay(20)
         assertThat(tested.availableItemsSize).isEqualTo(3)
     }
 
     @Test
-    fun `test minIdleObjects - when min = max, we don't go over the total number when returning back`() {
+    fun `test minIdleObjects - when min = max, we don't go over the total number when returning back`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(maxObjects = 3, minIdleObjects = 3),
             false
         )
-        val widget = tested.take().get()
-        Thread.sleep(20)
+        val widget = tested.take()
+        delay(20)
         // 3 max, one active, meaning expecting 2 available
         assertThat(tested.availableItemsSize).isEqualTo(2)
-        tested.giveBack(widget).get()
-        Thread.sleep(20)
+        tested.giveBack(widget)
+        delay(20)
         assertThat(tested.availableItemsSize).isEqualTo(3)
     }
 
     @Test
-    fun `test minIdleObjects - cleaned up objects result in more objects being created`() {
+    fun `test minIdleObjects - cleaned up objects result in more objects being created`(): Unit = runBlocking {
         tested = ActorBasedObjectPool(
             factory,
             configuration.copy(maxObjects = 3, minIdleObjects = 3, maxObjectTtl = 50),
             false
         )
-        val widget = tested.take().get()
-        tested.giveBack(widget).get()
-        Thread.sleep(20)
+        val widget = tested.take()
+        tested.giveBack(widget)
+        delay(20)
         assertThat(tested.availableItemsSize).isEqualTo(3)
         assertThat(factory.created.size).isEqualTo(3)
-        Thread.sleep(70)
+        delay(70)
         tested.testAvailableItems()
         await.untilCallTo { tested.availableItemsSize } matches { it == 3 }
         await.untilCallTo { factory.created.size } matches { it == 6 }
@@ -420,15 +424,14 @@ class ForTestingMyWidget(
 
 class ForTestingWeakMyFactory :
     ObjectFactory<ForTestingMyWidget> {
-    override fun create(): CompletableFuture<out ForTestingMyWidget> {
-        val widget = ForTestingMyWidget()
-        return CompletableFuture.completedFuture(widget)
+    override suspend fun create(): ForTestingMyWidget {
+        return ForTestingMyWidget()
     }
 
-    override fun destroy(item: ForTestingMyWidget) {
+    override suspend fun destroy(item: ForTestingMyWidget) {
     }
 
-    override fun validate(item: ForTestingMyWidget): Try<ForTestingMyWidget> {
+    override suspend fun validate(item: ForTestingMyWidget): Try<ForTestingMyWidget> {
         return Try.just(item)
     }
 }
@@ -447,36 +450,36 @@ class ForTestingMyFactory :
     var failValidation: Boolean = false
     var failValidationTry: Boolean = false
 
-    override fun create(): CompletableFuture<ForTestingMyWidget> {
+    override suspend fun create(): ForTestingMyWidget {
         if (creationStuck) {
-            return CompletableFuture()
+            return suspendCoroutine {
+                // never continue
+            }
         }
-        if (creationStuckTime != null) {
-            val f = CompletableFuture<ForTestingMyWidget>()
-            Thread {
-                Thread.sleep(creationStuckTime!!)
-                val widget = ForTestingMyWidget()
-                created += widget
-                f.complete(widget)
-            }.start()
-            return f
+        creationStuckTime?.let {
+            delay(it)
+            val widget = ForTestingMyWidget()
+            created += widget
+            return widget
         }
         if (failCreation) {
             throw Exception("failed to create")
         }
+
+        // TODO this should be redundant with failCreation
         if (failCreationFuture) {
-            return FP.failed(Exception("failed to create"))
+            throw Exception("failed to create")
         }
         val widget = ForTestingMyWidget()
         created += widget
-        return CompletableFuture.completedFuture(widget)
+        return widget
     }
 
-    override fun destroy(item: ForTestingMyWidget) {
+    override suspend fun destroy(item: ForTestingMyWidget) {
         destroyed += item
     }
 
-    override fun validate(item: ForTestingMyWidget): Try<ForTestingMyWidget> {
+    override suspend fun validate(item: ForTestingMyWidget): Try<ForTestingMyWidget> {
         if (failValidation) {
             throw Exception("failed to validate")
         }
@@ -487,9 +490,12 @@ class ForTestingMyFactory :
         return Try.just(item)
     }
 
-    override fun test(item: ForTestingMyWidget): CompletableFuture<ForTestingMyWidget> {
+    override suspend fun test(item: ForTestingMyWidget): ForTestingMyWidget {
         val completableFuture = CompletableFuture<ForTestingMyWidget>()
+
+        // TODO the original implementation isn't quite clear
+
         tested += item to completableFuture
-        return completableFuture
+        return item
     }
 }

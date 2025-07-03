@@ -9,12 +9,20 @@ import com.github.jasync.sql.db.util.map
 import com.github.jasync.sql.db.util.mapTry
 import com.github.jasync.sql.db.util.onComplete
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.ObsoleteCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.ActorScope
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.actor
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.launch
 import java.util.LinkedList
 import java.util.Queue
 import java.util.WeakHashMap
@@ -79,52 +87,38 @@ internal constructor(
         }
     }
 
-    override fun take(): CompletableFuture<T> {
+    override suspend fun take(): T {
         if (closed) {
             throw PoolAlreadyTerminatedException()
         }
-        val future = CompletableFuture<T>()
-        val offered = actor.trySend(Take(future)).isSuccess
-        if (!offered) {
-            future.completeExceptionally(Exception("could not offer to actor"))
-        }
-        return future
+        val future = CompletableDeferred<T>()
+        actor.send(Take(future))
+        return future.await()
     }
 
-    override fun softEvict(): CompletableFuture<AsyncObjectPool<T>> {
-        val future = CompletableFuture<Unit>()
-        val offered = actor.trySend(SoftEvictAll(future)).isSuccess
-        if (!offered) {
-            future.completeExceptionally(Exception("could not offer to actor"))
-        }
-        return future.map { this }
+    override suspend fun softEvict() {
+        val future = CompletableDeferred<Unit>()
+        actor.send(SoftEvictAll(future))
+        future.await()
     }
 
-    override fun giveBack(item: T): CompletableFuture<AsyncObjectPool<T>> {
-        val future = CompletableFuture<Unit>()
-        val offered = actor.trySend(GiveBack(item, future)).isSuccess
-        if (!offered) {
-            future.completeExceptionally(Exception("could not offer to actor"))
-        }
-        return future.map { this }
+    override suspend fun giveBack(item: T) {
+        val future = CompletableDeferred<Unit>()
+        actor.send(GiveBack(item, future))
+        future.await()
     }
 
-    override fun close(): CompletableFuture<AsyncObjectPool<T>> {
+    override suspend fun close() {
         if (closed) {
-            return CompletableFuture.completedFuture(this)
+            return
         }
         logger.info { "closing the pool" }
         closed = true
-        val future = CompletableFuture<Unit>()
-        val offered = actor.trySend(Close(future)).isSuccess
-        if (!offered) {
-            future.completeExceptionally(Exception("could not offer to actor"))
-        }
+        val future = CompletableDeferred<Unit>()
+        actor.send(Close(future))
         testItemsFuture?.cancel(true)
-        return future.map {
-            job.cancel()
-            this
-        }
+        future.await()
+        job.cancel()
     }
 
     fun testAvailableItems() {
@@ -139,17 +133,16 @@ internal constructor(
         }
     }
 
-    private val actorInstance =
-        ObjectPoolActor(objectFactory, configuration, extraTimeForTimeoutCompletion) {
-            actor
-        }
-
+    @OptIn(ObsoleteCoroutinesApi::class)
     private val actor: SendChannel<ActorObjectPoolMessage<T>> = actor(
         context = configuration.coroutineDispatcher,
         capacity = Int.MAX_VALUE,
         start = CoroutineStart.DEFAULT,
         onCompletion = null
     ) {
+        @OptIn(ObsoleteCoroutinesApi::class)
+        val actorInstance = ObjectPoolActor(objectFactory, configuration, extraTimeForTimeoutCompletion, this)
+        @OptIn(ObsoleteCoroutinesApi::class)
         for (message in channel) {
             try {
                 actorInstance.onReceive(message)
@@ -159,12 +152,12 @@ internal constructor(
         }
     }
 
-    val availableItems: List<T> get() = actorInstance.availableItemsList
-    val usedItems: List<T> get() = actorInstance.usedItemsList
-    val waitingForItem: List<CompletableFuture<T>> get() = actorInstance.waitingForItemList
-    val usedItemsSize: Int get() = actorInstance.usedItemsSize
-    val waitingForItemSize: Int get() = actorInstance.waitingForItemSize
-    val availableItemsSize: Int get() = actorInstance.availableItemsSize
+//    val availableItems: List<T> get() = actorInstance.availableItemsList
+//    val usedItems: List<T> get() = actorInstance.usedItemsList
+//    val waitingForItem: List<CompletableDeferred<T>> get() = actorInstance.waitingForItemList
+//    val usedItemsSize: Int get() = actorInstance.usedItemsSize
+//    val waitingForItemSize: Int get() = actorInstance.waitingForItemSize
+//    val availableItemsSize: Int get() = actorInstance.availableItemsSize
 }
 
 @Suppress("unused")
@@ -174,11 +167,11 @@ private sealed class ActorObjectPoolMessage<T : PooledObject> {
     }
 }
 
-private class Take<T : PooledObject>(val future: CompletableFuture<T>) : ActorObjectPoolMessage<T>()
-private class SoftEvictAll<T : PooledObject>(val future: CompletableFuture<Unit>) : ActorObjectPoolMessage<T>()
+private class Take<T : PooledObject>(val future: CompletableDeferred<T>) : ActorObjectPoolMessage<T>()
+private class SoftEvictAll<T : PooledObject>(val future: CompletableDeferred<Unit>) : ActorObjectPoolMessage<T>()
 private class GiveBack<T : PooledObject>(
     val returnedItem: T,
-    val future: CompletableFuture<Unit>,
+    val future: CompletableDeferred<Unit>,
     val exception: Throwable? = null,
     val originalTime: Long? = null
 ) : ActorObjectPoolMessage<T>() {
@@ -195,8 +188,8 @@ private class GiveBack<T : PooledObject>(
 private class Created<T : PooledObject>(
     val itemCreateId: Int,
     val item: Try<T>,
-    val takeAskFuture: CompletableFuture<T>?,
-    val objectHolder: ObjectHolder<CompletableFuture<out T>>
+    val takeAskFuture: CompletableDeferred<T>?,
+    val objectHolder: ObjectHolder<CompletableDeferred<T>>
 ) : ActorObjectPoolMessage<T>() {
     override fun toString(): String {
         val id = when (item) {
@@ -208,7 +201,7 @@ private class Created<T : PooledObject>(
 }
 
 private class TestPoolItems<T : PooledObject> : ActorObjectPoolMessage<T>()
-private class Close<T : PooledObject>(val future: CompletableFuture<Unit>) :
+private class Close<T : PooledObject>(val future: CompletableDeferred<Unit>) :
     ActorObjectPoolMessage<T>()
 
 @Suppress("REDUNDANT_ELSE_IN_WHEN")
@@ -216,26 +209,27 @@ private class ObjectPoolActor<T : PooledObject>(
     private val objectFactory: ObjectFactory<T>,
     private val configuration: PoolConfiguration,
     private val extraTimeForTimeoutCompletion: Long,
-    private val channelProvider: () -> SendChannel<ActorObjectPoolMessage<T>>
+    @OptIn(ObsoleteCoroutinesApi::class)
+    private val actorScope: ActorScope<ActorObjectPoolMessage<T>>,
 ) {
-
     private val availableItems: Queue<PoolObjectHolder<T>> = LinkedList()
-    private val waitingQueue: Queue<ObjectHolder<CompletableFuture<T>>> = LinkedList()
+    private val waitingQueue: Queue<ObjectHolder<CompletableDeferred<T>>> = LinkedList()
     private val inUseItems = WeakHashMap<T, ItemInUseHolder<T>>()
-    private val inCreateItems = mutableMapOf<Int, ObjectHolder<CompletableFuture<out T>>>()
+    private val inCreateItems = mutableMapOf<Int, ObjectHolder<CompletableDeferred<T>>>()
     private var createIndex = 0
-    private val channel: SendChannel<ActorObjectPoolMessage<T>> by lazy { channelProvider() }
+    @OptIn(ObsoleteCoroutinesApi::class)
+    private val channel: SendChannel<ActorObjectPoolMessage<T>> = actorScope.channel
 
     val availableItemsList: List<T> get() = availableItems.map { it.item }
     val usedItemsList: List<T> get() = inUseItems.keys.toList()
-    val waitingForItemList: List<CompletableFuture<T>> get() = waitingQueue.toList().map { it.item }
+    val waitingForItemList: List<CompletableDeferred<T>> get() = waitingQueue.toList().map { it.item }
     val usedItemsSize: Int get() = inUseItems.size
     val waitingForItemSize: Int get() = waitingQueue.size
     val availableItemsSize: Int get() = availableItems.size
 
     var closed = false
 
-    fun onReceive(message: ActorObjectPoolMessage<T>) {
+    suspend fun onReceive(message: ActorObjectPoolMessage<T>) {
         logger.trace { "received message: $message ; $poolStatusString" }
         when (message) {
             is Take<T> -> handleTake(message)
@@ -249,7 +243,7 @@ private class ObjectPoolActor<T : PooledObject>(
         scheduleNewItemsIfNeeded()
     }
 
-    private fun handleSoftEvictAll(message: SoftEvictAll<T>) {
+    private suspend fun handleSoftEvictAll(message: SoftEvictAll<T>) {
         evictAvailableItems()
         inUseItems.values.forEach { it.markForEviction = true }
         inCreateItems.entries.forEach { it.value.markForEviction = true }
@@ -257,12 +251,14 @@ private class ObjectPoolActor<T : PooledObject>(
         message.future.complete(Unit)
     }
 
-    private fun evictAvailableItems() {
-        availableItems.forEach { it.item.destroy() }
+    private suspend fun evictAvailableItems() {
+        for (it in availableItems) {
+            it.item.destroy()
+        }
         availableItems.clear()
     }
 
-    private fun scheduleNewItemsIfNeeded() {
+    private suspend fun scheduleNewItemsIfNeeded() {
         logger.trace { "scheduleNewItemsIfNeeded - $poolStatusString" }
         // deal with inconsistency in case we have items but also waiting futures
         while (availableItems.size > 0 && waitingQueue.isNotEmpty()) {
@@ -296,7 +292,7 @@ private class ObjectPoolActor<T : PooledObject>(
         get() =
             "availableItems=${availableItems.size} waitingQueue=${waitingQueue.size} inUseItems=${inUseItems.size} inCreateItems=${inCreateItems.size} ${this.channel}"
 
-    private fun handleClose(message: Close<T>) {
+    private suspend fun handleClose(message: Close<T>) {
         try {
             closed = true
             channel.close()
@@ -308,7 +304,7 @@ private class ObjectPoolActor<T : PooledObject>(
             inUseItems.clear()
             waitingQueue.forEach { it.item.completeExceptionally(PoolAlreadyTerminatedException()) }
             waitingQueue.clear()
-            inCreateItems.values.forEach {
+            for (it in inCreateItems.values) {
                 it.item.completeExceptionally(PoolAlreadyTerminatedException())
             }
             inCreateItems.clear()
@@ -318,7 +314,7 @@ private class ObjectPoolActor<T : PooledObject>(
         }
     }
 
-    private fun handleTestPoolItems() {
+    private suspend fun handleTestPoolItems() {
         sendAvailableItemsToTest()
         checkItemsInCreationForTimeout()
         checkItemsInTestOrQueryForTimeout()
@@ -345,8 +341,10 @@ private class ObjectPoolActor<T : PooledObject>(
         }
     }
 
-    private fun checkItemsInTestOrQueryForTimeout() {
-        inUseItems.entries.removeAll { entry ->
+    private suspend fun checkItemsInTestOrQueryForTimeout() {
+        val entryIterator = inUseItems.entries.iterator()
+        while (entryIterator.hasNext()) {
+            val entry = entryIterator.next()
             val holder = entry.value
             val item = entry.key
             var itemWasTimeout = false
@@ -365,7 +363,9 @@ private class ObjectPoolActor<T : PooledObject>(
                 item.destroy()
                 itemWasTimeout = true
             }
-            itemWasTimeout
+            if (itemWasTimeout) {
+                entryIterator.remove()
+            }
         }
     }
 
@@ -380,13 +380,13 @@ private class ObjectPoolActor<T : PooledObject>(
         }
     }
 
-    private fun T.destroy() {
+    private suspend fun T.destroy() {
         logger.trace { "destroy item ${this.id}" }
         objectFactory.destroy(this)
     }
 
-    private fun sendAvailableItemsToTest() {
-        availableItems.forEach {
+    private suspend fun sendAvailableItemsToTest() {
+        for (it in availableItems) {
             val item = it.item
             logger.trace { "test: ${item.id} available ${it.timeElapsed} ms" }
             when {
@@ -401,11 +401,15 @@ private class ObjectPoolActor<T : PooledObject>(
                 }
 
                 else -> {
-                    val test = objectFactory.test(item)
+                    val test = CompletableDeferred<T>()
                     inUseItems[item] = ItemInUseHolder(item.id, isInTest = true, testFuture = test)
-                    test.mapTry { _, t ->
-                        offerOrLog(GiveBack(item, CompletableFuture(), t, originalTime = it.time)) {
-                            "test item"
+                    @OptIn(ObsoleteCoroutinesApi::class)
+                    actorScope.launch {
+                        try {
+                            test.complete(objectFactory.test(item))
+                        } catch (t: Throwable) {
+                            test.completeExceptionally(t)
+                            offerOrLog(GiveBack(item, CompletableDeferred(), t, originalTime = it.time))
                         }
                     }
                 }
@@ -414,14 +418,11 @@ private class ObjectPoolActor<T : PooledObject>(
         availableItems.clear()
     }
 
-    private fun offerOrLog(message: ActorObjectPoolMessage<T>, logMessage: () -> String) {
-        val offered = channel.trySend(message).isSuccess
-        if (!offered) {
-            logger.warn { "failed to offer on ${logMessage()}" }
-        }
+    private suspend fun offerOrLog(message: ActorObjectPoolMessage<T>) {
+        channel.send(message)
     }
 
-    private fun handleCreated(message: Created<T>) {
+    private suspend fun handleCreated(message: Created<T>) {
         val removed = inCreateItems.remove(message.itemCreateId)
         if (removed == null) {
             logger.warn { "could not find connection ${message.itemCreateId}" }
@@ -448,7 +449,7 @@ private class ObjectPoolActor<T : PooledObject>(
         }
     }
 
-    private fun T.borrowTo(future: CompletableFuture<T>, validate: Boolean = true, markForEviction: Boolean = false) {
+    private suspend fun T.borrowTo(future: CompletableDeferred<T>, validate: Boolean = true, markForEviction: Boolean = false) {
         if (validate) {
             validate(this)
         }
@@ -457,7 +458,7 @@ private class ObjectPoolActor<T : PooledObject>(
         future.complete(this)
     }
 
-    private fun handleGiveBack(message: GiveBack<T>) {
+    private suspend fun handleGiveBack(message: GiveBack<T>) {
         try {
             val removed = inUseItems.remove(message.returnedItem)
             removed?.apply { cleanedByPool = true }
@@ -466,9 +467,9 @@ private class ObjectPoolActor<T : PooledObject>(
                     this.availableItems.any { holder -> message.returnedItem === holder.item }
                 logger.trace { "give back got item not in use: ${message.returnedItem.id} isFromOurPool=$isFromOurPool ; $poolStatusString" }
                 if (isFromOurPool) {
-                    message.future.failed(IllegalStateException("This item has already been returned"))
+                    message.future.completeExceptionally(IllegalStateException("This item has already been returned"))
                 } else {
-                    message.future.failed(IllegalArgumentException("The returned item did not come from this pool."))
+                    message.future.completeExceptionally(IllegalArgumentException("The returned item did not come from this pool."))
                 }
                 return
             }
@@ -510,7 +511,7 @@ private class ObjectPoolActor<T : PooledObject>(
         }
     }
 
-    private fun handleTake(message: Take<T>) {
+    private suspend fun handleTake(message: Take<T>) {
         // take from available
         while (availableItems.isNotEmpty()) {
             val future = message.future
@@ -523,7 +524,7 @@ private class ObjectPoolActor<T : PooledObject>(
         createNewItemPutInWaitQueue(message)
     }
 
-    private fun borrowFirstAvailableItem(future: CompletableFuture<T>): Boolean {
+    private suspend fun borrowFirstAvailableItem(future: CompletableDeferred<T>): Boolean {
         val itemHolder = availableItems.remove()
         try {
             validateTtl(itemHolder.item)
@@ -545,7 +546,7 @@ private class ObjectPoolActor<T : PooledObject>(
 
     private val totalItems: Int get() = inUseItems.size + inCreateItems.size + availableItems.size
 
-    private fun createNewItemPutInWaitQueue(message: Take<T>) {
+    private suspend fun createNewItemPutInWaitQueue(message: Take<T>) {
         try {
             if (totalItems < configuration.maxObjects) {
                 createObject(message.future)
@@ -558,26 +559,30 @@ private class ObjectPoolActor<T : PooledObject>(
                     message.future.completeExceptionally(PoolExhaustedException("There are no objects available and the waitQueue is full"))
                 }
             }
-        } catch (e: Exception) {
-            message.future.completeExceptionally(e)
+        } catch (e: CancellationException) {
+            message.future.cancel(e)
+            throw e
+        } catch (t: Throwable) {
+            message.future.completeExceptionally(t)
         }
     }
 
-    private fun createObject(future: CompletableFuture<T>?) {
-        val created = objectFactory.create()
-        val itemCreateId = createIndex
-        createIndex++
+    private fun createObject(future: CompletableDeferred<T>?) {
+        val itemCreateId = ++createIndex
+        logger.trace { "createObject createRequest=$itemCreateId" }
+        val created = CompletableDeferred<T>()
         val objectHolder = ObjectHolder(created)
         inCreateItems[itemCreateId] = objectHolder
-        logger.trace { "createObject createRequest=$itemCreateId" }
-        created.onComplete { tried ->
-            offerOrLog(Created(itemCreateId, tried, future, objectHolder)) {
-                "failed to offer on created item $itemCreateId"
+        @OptIn(ObsoleteCoroutinesApi::class)
+        actorScope.launch {
+            val tried = Try {
+                objectFactory.create()
             }
+            offerOrLog(Created(itemCreateId, tried, future, objectHolder))
         }
     }
 
-    private fun validate(item: T) {
+    private suspend fun validate(item: T) {
         val tried = objectFactory.validate(item)
         if (tried is Failure) {
             throw tried.exception
@@ -604,7 +609,7 @@ private class ObjectHolder<T : Any>(
 private data class ItemInUseHolder<T : PooledObject>(
     val itemId: String,
     val isInTest: Boolean,
-    val testFuture: CompletableFuture<T>? = null,
+    val testFuture: CompletableDeferred<T>? = null,
     val time: Long = System.currentTimeMillis(),
     var cleanedByPool: Boolean = false,
     var markForEviction: Boolean = false
@@ -612,10 +617,10 @@ private data class ItemInUseHolder<T : PooledObject>(
 ) {
     val timeElapsed: Long get() = System.currentTimeMillis() - time
 
-    @Suppress("unused")
-    protected fun finalize() {
-        if (!cleanedByPool) {
-            logger.warn { "LEAK DETECTED for item $this - $timeElapsed ms since in use" }
-        }
-    }
+//    @Suppress("unused")
+//    protected fun finalize() {
+//        if (!cleanedByPool) {
+//            logger.warn { "LEAK DETECTED for item $this - $timeElapsed ms since in use" }
+//        }
+//    }
 }

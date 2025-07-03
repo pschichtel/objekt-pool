@@ -1,11 +1,7 @@
 package com.github.jasync.sql.db.pool
 
-import com.github.jasync.sql.db.util.complete
-import com.github.jasync.sql.db.util.failed
-import com.github.jasync.sql.db.util.flatMap
-import com.github.jasync.sql.db.util.onCompleteAsync
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Executor
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /**
  *
@@ -25,8 +21,7 @@ interface AsyncObjectPool<T> {
      *
      * @return future that will eventually return a usable pool object.
      */
-
-    fun take(): CompletableFuture<T>
+    suspend fun take(): T
 
     /**
      *
@@ -37,13 +32,12 @@ interface AsyncObjectPool<T> {
      * @param item
      * @return
      */
-
-    fun giveBack(item: T): CompletableFuture<AsyncObjectPool<T>>
+    suspend fun giveBack(item: T)
 
     /**
      * Mark all objects in the pool as invalid. Objects will be evicted when not in use.
      */
-    fun softEvict(): CompletableFuture<AsyncObjectPool<T>>
+    suspend fun softEvict()
 
     /**
      *
@@ -52,35 +46,23 @@ interface AsyncObjectPool<T> {
      *
      * @return
      */
+    suspend fun close()
+}
 
-    fun close(): CompletableFuture<AsyncObjectPool<T>>
-
-    /**
-     *
-     * Retrieve and use an object from the pool for a single computation, returning it when the operation completes.
-     *
-     * @param function function that uses the object
-     * @return function wrapped , take and giveBack
-     */
-
-    fun <A> use(executor: Executor, function: (T) -> CompletableFuture<A>): CompletableFuture<A> =
-        take().flatMap { item ->
-            val p = CompletableFuture<A>()
-            try {
-                function(item).onCompleteAsync(executor) { r ->
-                    giveBack(item).onCompleteAsync(executor) {
-                        p.complete(r)
-                    }
-                }
-            } catch (t: Throwable) {
-                // calling f might throw exception.
-                // in that case the item will be removed from the pool if identified as invalid by the factory.
-                // the error returned to the user is the original error thrown by f.
-                giveBack(item).onCompleteAsync(executor) {
-                    p.failed(t)
-                }
-            }
-
-            p
+/**
+ *
+ * Retrieve and use an object from the pool for a single computation, returning it when the operation completes.
+ *
+ * @param block function that uses the object
+ * @return result of block
+ */
+suspend fun <T, R> AsyncObjectPool<T>.use(block: (T) -> R): R {
+    val item = take()
+    try {
+        return block(item)
+    } finally {
+        withContext(NonCancellable) {
+            giveBack(item)
         }
+    }
 }
