@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm")
-    id("org.jlleitschuh.gradle.ktlint")
+    alias(libs.plugins.kotlin)
+    alias(libs.plugins.ktlint)
     `java-library`
     `maven-publish`
     jacoco
@@ -17,31 +17,16 @@ repositories {
     mavenCentral()
 }
 
-val KOTLIN_VERSION: String by project
-val KOTLIN_COROUTINES_VERSION: String by project
-val SL4J_VERSION: String by project
-val KOTLIN_LOGGING_VERSION: String by project
-val JACOCO_VERSION: String by project
-
-val JUNIT_VERSION: String by project
-val ASSERTJ_VERSION: String by project
-val MOCKK_VERSION: String by project
-val LOGBACK_VERSION: String by project
-val AWAITILITY_VERSION: String by project
-
 dependencies {
-    api("org.jetbrains.kotlin:kotlin-stdlib-jdk8:$KOTLIN_VERSION")
-    api("org.jetbrains.kotlin:kotlin-reflect:$KOTLIN_VERSION")
-    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:$KOTLIN_COROUTINES_VERSION")
-    implementation("org.slf4j:slf4j-api:$SL4J_VERSION")
-    implementation("io.github.oshai:kotlin-logging-jvm:$KOTLIN_LOGGING_VERSION")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:$KOTLIN_COROUTINES_VERSION")
-    testImplementation("junit:junit:$JUNIT_VERSION")
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$KOTLIN_VERSION")
-    testImplementation("org.assertj:assertj-core:$ASSERTJ_VERSION")
-    testImplementation("io.mockk:mockk:$MOCKK_VERSION")
-    testImplementation("org.awaitility:awaitility-kotlin:$AWAITILITY_VERSION")
-    testImplementation("ch.qos.logback:logback-classic:$LOGBACK_VERSION")
+    api(libs.kotlin.coroutines)
+    implementation(libs.slf4j)
+    implementation(libs.kotlin.logging)
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.assertj)
+    testImplementation(libs.mockk)
+    testImplementation(libs.awaitility)
+    testImplementation(libs.logback)
 }
 
 tasks {
@@ -55,7 +40,7 @@ tasks {
     }
 
     jacoco {
-        toolVersion = JACOCO_VERSION
+        toolVersion = libs.versions.jacoco.get()
     }
 
     register<JacocoReport>("codeCoverageReport") {
@@ -68,10 +53,10 @@ tasks {
         )
 
         reports {
-            xml.required.set(true)
-            xml.outputLocation.set(project.layout.buildDirectory.file("reports/jacoco/report.xml"))
-            html.required.set(false)
-            csv.required.set(false)
+            xml.required = true
+            xml.outputLocation = project.layout.buildDirectory.file("reports/jacoco/report.xml")
+            html.required = false
+            csv.required = false
         }
 
         subprojects {
