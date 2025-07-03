@@ -1,6 +1,4 @@
-include(
-    ":pool-async"
-)
+rootProject.name = "objekt-pool"
 
 pluginManagement {
     val KOTLIN_VERSION: String by settings
