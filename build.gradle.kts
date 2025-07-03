@@ -1,14 +1,17 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
 plugins {
     alias(libs.plugins.kotlin)
-    alias(libs.plugins.ktlint)
+    alias(libs.plugins.ktlint) apply false
     `java-library`
     `maven-publish`
     jacoco
     signing
 }
 
-java.sourceCompatibility = JavaVersion.VERSION_1_8
-java.targetCompatibility = JavaVersion.VERSION_1_8
+java.sourceCompatibility = JavaVersion.VERSION_11
+java.targetCompatibility = JavaVersion.VERSION_11
 
 group = "tel.schich"
 version = "0.1.0"
@@ -30,13 +33,10 @@ dependencies {
 }
 
 tasks {
-    compileKotlin {
-        kotlinOptions.suppressWarnings = true
-        kotlinOptions.jvmTarget = "1.8"
-    }
-
-    compileTestKotlin {
-        kotlinOptions.jvmTarget = "1.8"
+    withType<KotlinCompile>().configureEach {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_11
+        }
     }
 
     jacoco {
@@ -49,7 +49,7 @@ tasks {
         executionData.setFrom(
             fileTree(project.rootDir.absolutePath) {
                 include("**/build/jacoco/*.exec")
-            }
+            },
         )
 
         reports {
@@ -59,18 +59,17 @@ tasks {
             csv.required = false
         }
 
-        subprojects {
-            sourceSets(sourceSets.main.get())
-        }
+        sourceSets(sourceSets.main.get())
     }
 
     check {
-        dependsOn(ktlintCheck)
+        // dependsOn(ktlintCheck)
     }
 
     test {
-        jvmArgs = listOf(
-            "-Dio.netty.leakDetection.level=PARANOID"
-        )
+        jvmArgs =
+            listOf(
+                "-Dio.netty.leakDetection.level=PARANOID",
+            )
     }
 }

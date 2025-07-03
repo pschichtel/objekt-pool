@@ -7,7 +7,7 @@
     </appender>
 
     <appender name="FILE" class="ch.qos.logback.core.FileAppender">
-        <File>target/mysql-async-tests.log</File>
+        <File>build/mysql-async-tests.log</File>
         <encoder>
             <pattern>[%level][%thread][%d][%c{5}] %msg%ex%n</pattern>
         </encoder>
