@@ -22,7 +22,6 @@ repositories {
 
 dependencies {
     api(libs.kotlin.coroutines)
-    implementation(libs.slf4j)
     implementation(libs.kotlin.logging)
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
